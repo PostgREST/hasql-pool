@@ -1,20 +1,20 @@
 module Main where
 
+import Control.Concurrent.Async (race)
+import qualified Data.ByteString.Char8 as B8
 import qualified Hasql.Connection as Connection
 import qualified Hasql.Decoders as Decoders
 import qualified Hasql.Encoders as Encoders
 import Hasql.Pool
 import qualified Hasql.Session as Session
 import qualified Hasql.Statement as Statement
+import qualified System.Environment
 import Test.Hspec
 import Prelude
-import qualified System.Environment
-import qualified Data.ByteString.Char8 as B8
-import Control.Concurrent.Async (race)
 
 main = do
   connectionSettings <- getConnectionSettings
-  hspec $ describe "" $ do
+  hspec . describe "" $ do
     it "Releases a spot in the pool when there is a query error" $ do
       pool <- acquire 1 Nothing connectionSettings
       use pool badQuerySession `shouldNotReturn` (Right ())
@@ -48,6 +48,12 @@ main = do
       res <- use pool $ badQuerySession
       res <- use pool $ selectOneSession
       shouldSatisfy res $ isRight
+    it "The pool remains usable after release" $ do
+      pool <- acquire 1 Nothing connectionSettings
+      res <- use pool $ selectOneSession
+      release pool
+      res <- use pool $ selectOneSession
+      shouldSatisfy res $ isRight
     it "Getting and setting session variables works" $ do
       pool <- acquire 1 Nothing connectionSettings
       res <- use pool $ getSettingSession "testing.foo"
@@ -62,42 +68,42 @@ main = do
       res `shouldBe` Right ()
       res2 <- use pool $ getSettingSession "testing.foo"
       res2 `shouldBe` Right (Just "hello world")
-    it "Flushing the pool resets session variables" $ do
+    it "Releasing the pool resets session variables" $ do
       pool <- acquire 1 Nothing connectionSettings
       res <- use pool $ setSettingSession "testing.foo" "hello world"
       res `shouldBe` Right ()
-      flush pool
+      release pool
       res <- use pool $ getSettingSession "testing.foo"
       res `shouldBe` Right Nothing
-    it "Flushing a released pool leaves it dead" $ do
-      pool <- acquire 1 Nothing connectionSettings
-      release pool
-      flush pool
-      res <- use pool $ selectOneSession
-      res `shouldBe` Left PoolIsReleasedUsageError
     it "Times out connection acquisition" $ do
       pool <- acquire 1 (Just 1000) connectionSettings -- 1ms timeout
       sleeping <- newEmptyMVar
       t0 <- getCurrentTime
-      res <- race
-        (use pool $ liftIO $ do
-           putMVar sleeping ()
-           threadDelay 1000000) -- 1s
-        (do
-           takeMVar sleeping
-           use pool $ selectOneSession)
+      res <-
+        race
+          ( use pool $
+              liftIO $ do
+                putMVar sleeping ()
+                threadDelay 1000000 -- 1s
+          )
+          ( do
+              takeMVar sleeping
+              use pool $ selectOneSession
+          )
       t1 <- getCurrentTime
-      res `shouldBe` Right (Left AcquisitionTimeout)
+      res `shouldBe` Right (Left AcquisitionTimeoutUsageError)
       diffUTCTime t1 t0 `shouldSatisfy` (< 0.5) -- 0.5s
 
 getConnectionSettings :: IO Connection.Settings
-getConnectionSettings = B8.unwords . catMaybes <$> sequence
-  [ setting "host" $ defaultEnv "POSTGRES_HOST" "localhost"
-  , setting "port" $ defaultEnv "POSTGRES_PORT" "5432"
-  , setting "user" $ defaultEnv "POSTGRES_USER" "postgres"
-  , setting "password" $ maybeEnv "POSTGRES_PASSWORD"
-  , setting "dbname" $ defaultEnv "POSTGRES_DBNAME" "postgres"
-  ]
+getConnectionSettings =
+  B8.unwords . catMaybes
+    <$> sequence
+      [ setting "host" $ defaultEnv "POSTGRES_HOST" "localhost",
+        setting "port" $ defaultEnv "POSTGRES_PORT" "5432",
+        setting "user" $ defaultEnv "POSTGRES_USER" "postgres",
+        setting "password" $ maybeEnv "POSTGRES_PASSWORD",
+        setting "dbname" $ defaultEnv "POSTGRES_DBNAME" "postgres"
+      ]
   where
     maybeEnv env = fmap B8.pack <$> System.Environment.lookupEnv env
     defaultEnv env val = Just . fromMaybe val <$> maybeEnv env
@@ -116,7 +122,7 @@ badQuerySession :: Session.Session ()
 badQuerySession =
   Session.statement () statement
   where
-    statement = Statement.Statement "" Encoders.noParams Decoders.noResult True
+    statement = Statement.Statement "zzz" Encoders.noParams Decoders.noResult True
 
 closeConnSession :: Session.Session ()
 closeConnSession = do

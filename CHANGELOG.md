@@ -1,7 +1,18 @@
-# Unreleased (PostgREST fork)
+# 0.8.0.2
 
-Added support for timing out resource acquisition ([PR #](https://github.com/PostgREST/hasql-pool/pull/3)).
-Added support for flushing the pool without destroying it ([PR #2](https://github.com/PostgREST/hasql-pool/pull/2)).
+Fixed Windows build.
+
+# 0.8
+
+`release` became reusable. You can use it to destroy the whole pool (same as before), but now also you can use it to reset the connections.
+
+Acquisition timeout added.
+
+Breaking changes in API:
+
+- Removed `PoolIsReleasedUsageError`
+- `acquire` extended with the acquisition timeout parameter
+- `acquireDynamically` extended with the acquisition timeout parameter
 
 # 0.7.2
 
